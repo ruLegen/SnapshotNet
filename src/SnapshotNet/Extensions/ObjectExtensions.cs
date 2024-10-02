@@ -13,5 +13,9 @@ namespace SnapshotNet.Extensions
             action(o);
             return o;
         }
+        public static R Let<T,R>(this T o, Func<T,R> block)
+        {
+            return block(o);
+        }
     }
 }

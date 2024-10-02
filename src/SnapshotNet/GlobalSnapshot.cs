@@ -1,4 +1,5 @@
 ﻿using SnapshotNet.Extensions;
+using System;
 
 namespace SnapshotNet
 {
@@ -30,25 +31,25 @@ namespace SnapshotNet
         {
             var previousGlobalSnapshot = CurrentGlobalSnapshot;
 
-            HashSet<int> modified = null; // Effectively val; can be with contracts
+            HashSet<IStateObject> modified = null; // Effectively val; can be with contracts
             var result = Sync(() =>
             {
                 previousGlobalSnapshot = CurrentGlobalSnapshot;
-                //modified = previousGlobalSnapshot.modified;
-                //if (modified != null)
-                //{
-                //    pendingApplyObserverCount.add(1)
-                //}
+                modified = previousGlobalSnapshot.Modified;
+                if (modified != null)
+                {
+                    //pendingApplyObserverCount.add(1);
+                }
                 return takeNewGlobalSnapshot(previousGlobalSnapshot, block);
             });
 
             //// If the previous global snapshot had any modified states then notify the registered apply
             //// observers.
-            //modified?.let {
+            //modified?.Let(it=>{
             //    try
             //    {
-            //        val observers = applyObservers
-            //        observers.fastForEach {
+            //        var observers = ApplyObservers;
+            //        observers.fastForEach
             //            observer->
             //    observer(it, previousGlobalSnapshot)
             //}
@@ -59,12 +60,92 @@ namespace SnapshotNet
             //    }
             //}
 
-            //Sync {
-            //    checkAndOverwriteUnusedRecordsLocked()
-            //    modified?.fastForEach { processForUnusedRecordsLocked(it) }
-            //}
+            Sync(() =>
+            {
+                checkAndOverwriteUnusedRecordsLocked();
+                if (modified == null)
+                    return;
+                foreach (var i in modified)
+                {
+                    processForUnusedRecordsLocked(i);
+                }
+            });
 
             return result;
+        }
+
+        private void checkAndOverwriteUnusedRecordsLocked()
+        {
+            ExtraStateObjects.RemoveIf((it) => {
+               return !OverwriteUnusedRecordsLocked(it);
+            });
+        }
+
+        private bool OverwriteUnusedRecordsLocked(IStateObject state)
+        {
+            StateRecord current = state.FirstStateRecord;
+            StateRecord overwriteRecord = null;
+            StateRecord validRecord = null;
+            int reuseLimit = PinningTable.LowestOrDefault(NextSnapshotId);
+            int retainedRecords = 0;
+
+            while (current != null)
+            {
+                int currentId = current.SnapshotId;
+                if (currentId != INVALID_ID)
+                {
+                    if (currentId < reuseLimit)
+                    {
+                        if (validRecord == null)
+                        {
+                            // If any records are below [reuseLimit], keep the highest one
+                            // so the lowest snapshot can select it.
+                            validRecord = current;
+                            retainedRecords++;
+                        }
+                        else
+                        {
+                            // If [validRecord] is from an earlier snapshot, overwrite it instead.
+                            StateRecord recordToOverwrite = current.SnapshotId < validRecord.SnapshotId
+                                ? current
+                                : validRecord;
+
+                            if (recordToOverwrite == validRecord)
+                            {
+                                validRecord = current;
+                            }
+
+                            if (overwriteRecord == null)
+                            {
+                                // Find a record we will definitely keep
+                                overwriteRecord = state.FirstStateRecord.FindYoungestOr(
+                                    r => r.SnapshotId >= reuseLimit
+                                );
+                            }
+
+                            recordToOverwrite.SnapshotId = INVALID_ID;
+                            recordToOverwrite.Assign(overwriteRecord);
+                        }
+                    }
+                    else
+                    {
+                        retainedRecords++;
+                    }
+                }
+
+                current = current.Next;
+            }
+
+            return retainedRecords > 1;
+        }
+
+
+        private void processForUnusedRecordsLocked(IStateObject state)
+        {
+            if (OverwriteUnusedRecordsLocked(state))
+            {
+                ExtraStateObjects.Add(state);
+            }
         }
         private T takeNewGlobalSnapshot<T>(Snapshot previousGlobalSnapshot, Func<HashSet<int>, T> block)
         {

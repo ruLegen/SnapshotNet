@@ -1,5 +1,6 @@
 ﻿using SnapshotNet.Extensions;
 using System;
+using System.Diagnostics.CodeAnalysis;
 
 namespace SnapshotNet
 {
@@ -14,6 +15,8 @@ namespace SnapshotNet
         internal override Action<object>? ReadObserver { get; set; }
 
         internal override Action<object>? WriteObserver { get; set; }
+        internal override int WriteCount { get; set; } = 0;
+        internal override HashSet<IStateObject> Modified { get; set; }
 
         private int snapshots = 1;
         public MutableSnapshot(int id, HashSet<int> invalidSet, Action<object>? readObserver = null, Action<object>? writeObserver = null, Snapshot? parent = null) : base(id, invalidSet)
@@ -102,6 +105,27 @@ namespace SnapshotNet
             {
                 base.Dispose();
                 nestedDeactivated(this);
+            }
+        }
+
+        internal override void RecordModified(IStateObject state)
+        {
+            if (Modified == null)
+                Modified = new HashSet<IStateObject>(IStateObjectHashCodeEqualityComparer.Default);
+            Modified.Add(state);
+        }
+
+        class IStateObjectHashCodeEqualityComparer : EqualityComparer<IStateObject>
+        {
+
+            public override bool Equals(IStateObject? x, IStateObject? y)
+            {
+                return x?.GetHashCode() == y?.GetHashCode();
+            }
+
+            public override int GetHashCode([DisallowNull] IStateObject obj)
+            {
+                return obj.GetHashCode();
             }
         }
     }

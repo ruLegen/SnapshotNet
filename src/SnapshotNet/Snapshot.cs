@@ -1,4 +1,5 @@
 ﻿using SnapshotNet.Extensions;
+using SnapshotNet.Utils;
 using System;
 using System.Diagnostics.Metrics;
 using System.Runtime.CompilerServices;
@@ -12,6 +13,9 @@ namespace SnapshotNet
         private static object _lock = new object();
         private static ThreadLocal<Snapshot?> _threadSnapshot = new ThreadLocal<Snapshot?>();
         private static int _nextSnapshotId = INVALID_ID + 1;
+        internal static SnapshotDoubleIndexHeap PinningTable = new SnapshotDoubleIndexHeap();
+        internal static WeakHashSet<IStateObject> ExtraStateObjects = new WeakHashSet<IStateObject> ();
+
         public static int NextSnapshotId
         {
             get { lock (_lock) { return _nextSnapshotId; } }
@@ -42,14 +46,29 @@ namespace SnapshotNet
          * The write observer for the snapshot if there is one.
          */
         internal abstract Action<object> WriteObserver { get; set; }
+        internal abstract int WriteCount { get; set; }
+
+        internal abstract HashSet<IStateObject> Modified { get; set; }
 
 
+        protected bool isPinned => _pinningTrackingHandle >= 0;
+
+        protected int _pinningTrackingHandle = INVALID_ID;
         public Snapshot(int id, HashSet<int> invalidSet)
         {
             Id = id;
             InvalidSet = invalidSet;
+            _pinningTrackingHandle = id != INVALID_ID ? TrackPinning(id, InvalidSet) : -1;
         }
 
+        private int TrackPinning(int id, HashSet<int> invalidSet)
+        {
+            var pinned = invalidSet.Count == 0 ? id : invalidSet.Min();
+            return Sync(() =>
+            {
+                return PinningTable.Add(pinned);
+            });
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Enter(Action block)
@@ -106,6 +125,8 @@ namespace SnapshotNet
             //checkPrecondition(!applied || isPinned, () => "Unsupported operation on a disposed or applied snapshot");
 
         }
+        internal abstract void RecordModified(IStateObject state);
+
         public virtual void Dispose()
         {
             disposed = true;
@@ -117,7 +138,7 @@ namespace SnapshotNet
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        protected void Sync(Action action)
+        internal static void Sync(Action action)
         {
             lock (_lock)
             {
@@ -125,7 +146,7 @@ namespace SnapshotNet
             }
         }
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        protected T Sync<T>(Func<T> action)
+        internal static T Sync<T>(Func<T> action)
         {
             lock (_lock)
             {
@@ -183,5 +204,96 @@ namespace SnapshotNet
             else
                 return writeObserver ?? parentObserver;
         }
+
+        internal static T? ReadableSilent<T>(T r, int id, HashSet<int> invalid) where T : StateRecord
+        {
+            // The readable record is the valid record with the highest snapshotId
+            StateRecord? current = r;
+            StateRecord? candidate = null;
+            while (current != null)
+            {
+                if (Valid(current, id, invalid))
+                {
+                    candidate = candidate == null ? current
+                                                    : ((candidate.SnapshotId < current.SnapshotId) ? current
+                                                                                                    : candidate);
+                }
+                current = current.Next;
+            }
+            if (candidate != null)
+            {
+                return candidate as T;
+            }
+            return null;
+        }
+
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Valid(int currentSnapshot, int candidateSnapshot, HashSet<int> invalid)
+        {
+            return candidateSnapshot != INVALID_ID && candidateSnapshot <= currentSnapshot && !invalid.Contains(candidateSnapshot);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool Valid(StateRecord data, int snapshot, HashSet<int> invalid) => Valid(snapshot, data.SnapshotId, invalid);
+
+
+        internal static T Current<T>(T r, Snapshot snapshot) where T : StateRecord
+            => ReadableSilent(r, snapshot.Id, snapshot.InvalidSet) ?? ReadError<T>();
+        internal static T Current<T>(T r) where T : StateRecord
+        {
+            var res = Snapshot.Current().Let(snapshot => ReadableSilent(r, snapshot.Id, snapshot.InvalidSet) ??
+                    Sync(() => Snapshot.Current().Let(syncSnapshot => ReadableSilent(r, syncSnapshot.Id, syncSnapshot.InvalidSet))));
+            return res ?? ReadError<T>();
+        }
+
+        internal static void NotifyWrite(Snapshot snapshot, IStateObject stateObject)
+        {
+            snapshot.WriteCount += 1;
+            snapshot?.WriteObserver?.Invoke(stateObject);
+        }
+
+        internal static StateRecord? UsedLocked(IStateObject state)
+        {
+            var current = state.FirstStateRecord;
+            StateRecord? validRecord = null;
+
+            var reuseLimit = PinningTable.LowestOrDefault(NextSnapshotId) - 1;
+
+            var invalid = new HashSet<int>();
+            while (current != null)
+            {
+                var currentId = current.SnapshotId;
+                if (currentId == INVALID_ID)
+                {
+                    // Any records that were marked invalid by an abandoned snapshot or is marked reachable
+                    // can be used immediately.
+                    return current;
+                }
+                if (Valid(current, reuseLimit, invalid))
+                {
+                    if (validRecord == null)
+                    {
+                        validRecord = current;
+                    }
+                    else
+                    {
+                        // If we have two valid records one must obscure the other. Return the
+                        // record with the lowest id
+                        return current.SnapshotId < validRecord.SnapshotId ? current : validRecord;
+                    }
+                }
+                current = current.Next;
+            }
+            return null;
+        }
+
+        internal static T ReadError<T>()
+        {
+            throw new Exception("Reading a state that was created after the snapshot was taken or in a snapshot that " +
+                "has not yet been applied");
+
+        }
     }
 }
+
