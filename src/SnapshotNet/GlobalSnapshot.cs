@@ -73,7 +73,12 @@ namespace SnapshotNet
 
             return result;
         }
-
+        public override void Dispose()
+        {
+            Sync(() => {
+                ReleasePinnedSnapshotLocked();
+            });
+        }
         private void checkAndOverwriteUnusedRecordsLocked()
         {
             ExtraStateObjects.RemoveIf((it) => {

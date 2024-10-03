@@ -130,11 +130,24 @@ namespace SnapshotNet
         public virtual void Dispose()
         {
             disposed = true;
-            lock (this)
+            Sync(() =>
             {
-                //TODO implement
-                //releasePinnedSnapshotLocked();
+                ReleasePinnedSnapshotLocked();
+            });
+        }
+
+        internal void ReleasePinnedSnapshotLocked()
+        {
+            if (_pinningTrackingHandle >= 0)
+            {
+                ReleasePinningLocked(_pinningTrackingHandle);
+                _pinningTrackingHandle = -1;
             }
+        }
+
+        internal void ReleasePinningLocked(int handle)
+        {
+            PinningTable.Remove(handle);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

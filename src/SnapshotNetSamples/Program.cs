@@ -22,7 +22,6 @@ namespace SnapshotNetSamples
             Console.WriteLine("Hello, World!");
             var state = new SnapshotMutableState<int>(0,new Policy<int>());
             var s = Snapshot.TakeMutableSnapshot();
-            var s1 = Snapshot.TakeMutableSnapshot();
             
             state.Value = 1;
             PrintState("Befor snap",state);
@@ -30,16 +29,12 @@ namespace SnapshotNetSamples
             {
                 state.Value = 2;
                 PrintState("In snap 1", state);
-                var r = Snapshot.TakeMutableSnapshot();
-                r.Enter(() =>
+                var rr = Snapshot.TakeMutableSnapshot();
+                rr.Enter(() =>
                 {
-                    state.Value = 3;
-                    PrintState("In snap2 ", state);
-                    var rr = Snapshot.TakeMutableSnapshot();
-                    int i = 0;
+                    state.Value++;
+                    PrintState("In snap 2", state);
                 });
-                PrintState("after snap 1", state);
-
             });
             PrintState("after snap",state);
             Console.ReadLine();

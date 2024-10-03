@@ -17,7 +17,7 @@ namespace SnapshotNet
                     {
                         _next.Overwritable(this, it, (rec) => 
                         { 
-                            it.Value = value; 
+                            rec.Value = value; 
                             return rec; 
                         });
                     }
@@ -130,7 +130,7 @@ namespace SnapshotNet
                 return r ?? Create(int.MaxValue).Also(o =>
                 {
                     o.Next = state.FirstStateRecord;
-                    state.PrependStateRecord(this);
+                    state.PrependStateRecord(o);
                 });
             }
         }

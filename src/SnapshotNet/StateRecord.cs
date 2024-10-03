@@ -9,7 +9,12 @@ namespace SnapshotNet
 {
     public abstract class StateRecord
     {
-        internal int SnapshotId { get; set; } 
+        internal int SnapshotId { get; set; }
+
+        protected StateRecord(int snapshotId)
+        {
+            SnapshotId = snapshotId;
+        }
 
         internal StateRecord? Next { get; set; }
 
